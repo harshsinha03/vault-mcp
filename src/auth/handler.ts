@@ -15,6 +15,18 @@ import {
 	validateOAuthState,
 } from "./session";
 import { fetchUpstreamAuthToken, getUpstreamAuthorizeUrl, redirectResponse } from "./upstream";
+import { parseList } from "../vault";
+import { isLoginAllowed } from "../tools";
+
+// Where an authorization code may be sent. Dynamic client registration is open
+// to anyone, so without this a stranger's client gets a code for the vault the
+// moment the owner clicks Approve on its dialog.
+const DEFAULT_ALLOWED_REDIRECT_URIS =
+	"https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback";
+
+const isRedirectAllowed = (env: Env, redirectUri: string | undefined) =>
+	redirectUri !== undefined &&
+	parseList(env.VAULT_ALLOWED_REDIRECT_URIS ?? DEFAULT_ALLOWED_REDIRECT_URIS).includes(redirectUri);
 
 type AuthEnv = Env & { OAUTH_PROVIDER: OAuthHelpers };
 
@@ -64,6 +76,9 @@ export function createAuthHandler(provider: UpstreamProvider): Hono<{ Bindings: 
 		const { clientId } = oauthReqInfo;
 		if (!clientId) {
 			return c.text("Invalid request", 400);
+		}
+		if (!isRedirectAllowed(c.env, oauthReqInfo.redirectUri)) {
+			return c.text("Redirect URI not allowed", 400);
 		}
 
 		// Already approved: skip the dialog, but still bind state to the session.
@@ -135,8 +150,7 @@ export function createAuthHandler(provider: UpstreamProvider): Hono<{ Bindings: 
 			if (error instanceof OAuthError) {
 				return error.toResponse();
 			}
-			const message = error instanceof Error ? error.message : String(error);
-			return c.text(`Internal server error: ${message}`, 500);
+			return c.text("Internal server error", 500);
 		}
 	});
 
@@ -167,6 +181,9 @@ export function createAuthHandler(provider: UpstreamProvider): Hono<{ Bindings: 
 		if (!oauthReqInfo.clientId) {
 			return c.text("Invalid OAuth request data", 400);
 		}
+		if (!isRedirectAllowed(c.env, oauthReqInfo.redirectUri)) {
+			return c.text("Redirect URI not allowed", 400);
+		}
 
 		// The provider sends ?code=... on a successful authorization; reject early
 		// at the boundary if it is missing or empty instead of passing undefined downstream.
@@ -195,6 +212,10 @@ export function createAuthHandler(provider: UpstreamProvider): Hono<{ Bindings: 
 			throw error;
 		}
 		const { login, name, email } = identity;
+		// Never mint a grant for someone the API gate would refuse anyway.
+		if (!isLoginAllowed(login, provider.allowedLogins(c.env))) {
+			return c.text("Forbidden", 403);
+		}
 
 		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
 			metadata: {
@@ -202,7 +223,6 @@ export function createAuthHandler(provider: UpstreamProvider): Hono<{ Bindings: 
 			},
 			// Surfaced as `this.props` on VaultMCP.
 			props: {
-				accessToken,
 				email,
 				login,
 				name,

@@ -62,6 +62,8 @@ function appEnv(): Record<string, unknown> {
 		GITHUB_CLIENT_ID: "cid",
 		GITHUB_CLIENT_SECRET: "secret",
 		COOKIE_ENCRYPTION_KEY: SECRET,
+		VAULT_ALLOWED_GITHUB_LOGINS: "alice",
+		VAULT_ALLOWED_REDIRECT_URIS: "https://claude.ai/cb",
 	};
 }
 
@@ -109,6 +111,28 @@ describe("GET /authorize", () => {
 		expect(res.status).toBe(302);
 		expect(res.headers.get("Location")).toContain("github.com/login/oauth/authorize");
 		expect(kv.put).toHaveBeenCalled();
+	});
+
+	it("400s when the redirect URI is not on the allowlist", async () => {
+		oauthProvider.parseAuthRequest = vi.fn(async () => ({
+			...reqInfo,
+			redirectUri: "https://attacker.example/cb",
+		}));
+		const res = await request("https://mcp.example/authorize");
+		expect(res.status).toBe(400);
+		expect(await res.text()).toContain("Redirect URI not allowed");
+	});
+
+	it("accepts the claude.ai and claude.com callbacks by default", async () => {
+		for (const redirectUri of [
+			"https://claude.ai/api/mcp/auth_callback",
+			"https://claude.com/api/mcp/auth_callback",
+		]) {
+			oauthProvider.parseAuthRequest = vi.fn(async () => ({ ...reqInfo, redirectUri }));
+			const { VAULT_ALLOWED_REDIRECT_URIS: _, ...env } = appEnv();
+			const res = await GitHubHandler.request("https://mcp.example/authorize", undefined, env as never);
+			expect(res.status).toBe(200);
+		}
 	});
 });
 
@@ -162,22 +186,22 @@ describe("POST /authorize", () => {
 		expect(await res.text()).toContain("Invalid request");
 	});
 
-	it("500s with the message when state storage fails", async () => {
+	it("500s without leaking the error message when state storage fails", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 		kv.put.mockRejectedValueOnce(new Error("kv down"));
 		const { token, setCookie } = generateCSRFProtection();
 		const res = await postForm({ csrf_token: token, state: validState() }, setCookie.split(";")[0]);
 		expect(res.status).toBe(500);
-		expect(await res.text()).toContain("kv down");
+		expect(await res.text()).toBe("Internal server error");
 	});
 
-	it("stringifies a non-Error throw in the 500 message", async () => {
+	it("500s without leaking a non-Error throw", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 		kv.put.mockRejectedValueOnce("plain string failure");
 		const { token, setCookie } = generateCSRFProtection();
 		const res = await postForm({ csrf_token: token, state: validState() }, setCookie.split(";")[0]);
 		expect(res.status).toBe(500);
-		expect(await res.text()).toContain("plain string failure");
+		expect(await res.text()).toBe("Internal server error");
 	});
 
 	it("returns the OAuthError response when CSRF validation fails", async () => {
@@ -239,6 +263,19 @@ describe("GET /callback", () => {
 		expect(await res.text()).toContain("Invalid OAuth request data");
 	});
 
+	it("400s when the stored request's redirect URI is not on the allowlist", async () => {
+		const { stateToken } = await createOAuthState(
+			{ ...reqInfo, redirectUri: "https://attacker.example/cb" } as never,
+			kv as never,
+		);
+		const { setCookie } = await bindStateToSession(stateToken);
+		const consented = setCookie.split(";")[0].split("=").slice(1).join("=");
+		const res = await callback(`state=${stateToken}&code=the-code`, consented);
+		expect(res.status).toBe(400);
+		expect(await res.text()).toContain("Redirect URI not allowed");
+		expect(oauthProvider.completeAuthorization).not.toHaveBeenCalled();
+	});
+
 	it("clears the consent cookie on the final redirect", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ access_token: "gho_token" })));
 		octo.getAuthenticated.mockResolvedValue({ data: { login: "alice", name: null, email: null } });
@@ -288,6 +325,8 @@ describe("GET /callback with the Google provider", () => {
 		GOOGLE_CLIENT_ID: "gcid",
 		GOOGLE_CLIENT_SECRET: "gsecret",
 		COOKIE_ENCRYPTION_KEY: SECRET,
+		VAULT_ALLOWED_GOOGLE_EMAILS: "alice@example.com",
+		VAULT_ALLOWED_REDIRECT_URIS: "https://claude.ai/cb",
 	});
 
 	const seedState = async () => {
@@ -373,6 +412,8 @@ describe("the generic OIDC provider", () => {
 		OIDC_CLIENT_SECRET: "osecret",
 		OIDC_DISPLAY_NAME: "Acme SSO",
 		COOKIE_ENCRYPTION_KEY: SECRET,
+		VAULT_ALLOWED_OIDC_EMAILS: "alice@example.com",
+		VAULT_ALLOWED_REDIRECT_URIS: "https://claude.ai/cb",
 	});
 
 	const stubIdp = (userinfo: Record<string, unknown>) => {
