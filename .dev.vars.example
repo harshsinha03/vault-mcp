@@ -44,6 +44,11 @@ VAULT_REPO=<vault repo name>
 #   VAULT_BRANCH             -> "main"
 #   VAULT_ALLOWED_PREFIXES   -> "" (whole repo)
 #   VAULT_DENIED_PREFIXES    -> ".git/,.obsidian/,.claude/"
+#   VAULT_DISABLED_TOOLS     -> "delete_note"
+#   VAULT_ALLOWED_REDIRECT_URIS -> the claude.ai and claude.com callbacks
 # VAULT_BRANCH=main
 # VAULT_ALLOWED_PREFIXES=
 # VAULT_DENIED_PREFIXES=.git/,.obsidian/,.claude/
+# VAULT_DISABLED_TOOLS=delete_note
+# Local testing with the MCP inspector needs its OAuth callback here (exact match):
+# VAULT_ALLOWED_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,<inspector callback url>

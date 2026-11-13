@@ -6,8 +6,9 @@
 
 Authenticated **remote MCP server** on Cloudflare Workers that exposes a private, GitHub-hosted
 Obsidian vault to both **claude.ai** (Web / Desktop / iPhone) and **Claude Code** — one free
-deployment serving every Claude surface. It reads notes, creates/overwrites them, and deletes
-them; it never renames or moves. Every mutation is a git commit, so deletes stay revertable.
+deployment serving every Claude surface. It reads notes and creates/overwrites them; deleting
+is off by default and can be turned on with `VAULT_DISABLED_TOOLS`. It never renames or moves.
+Every mutation is a git commit, so writes and deletes stay revertable.
 
 It works against the vault through the GitHub API, so the source repo can stay private and there is
 no always-on machine to maintain. Deploy your own instance with C3 (one command) or clone it
@@ -30,9 +31,13 @@ ships generic.
 | --- | --- |
 | `list_notes` | List note (`.md`) paths, optionally scoped to a subdirectory. |
 | `read_note` | Read the raw markdown of one note by repo-relative path. |
-| `write_note` | Create a new note or overwrite an existing one (markdown paths only). |
-| `delete_note` | Delete an existing note by path (markdown paths only; recorded as a revertable git commit). |
-| `search_notes` | Content search (GitHub code search, indexed) + filename search, merged. |
+| `write_note` | Create a new note or overwrite an existing one (markdown paths only, at most 512 KB of content). |
+| `delete_note` | Delete an existing note by path (markdown paths only; recorded as a revertable git commit). **Off by default.** |
+| `search_notes` | Content search (GitHub code search, indexed) + filename search, merged. Only hits from the vault repo are returned. |
+
+`VAULT_DISABLED_TOOLS` lists tools that are never registered (comma-separated; default
+`delete_note`). Set it to an empty string to enable `delete_note`, or to
+`write_note,delete_note` for a read-only deploy.
 
 ## Two credentials, two jobs
 
@@ -57,7 +62,25 @@ its own OAuth app secrets and its own allowlist, because the identity it yields 
 | `oidc` | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | `VAULT_ALLOWED_OIDC_EMAILS` | verified email from the IdP's `userinfo` (case-insensitive) |
 
 Only the selected provider's keys are required. Accounts whose email is not verified are
-rejected before the allowlist is consulted.
+rejected before the allowlist is consulted, and an identity that is not on the allowlist is
+refused at login — no grant is issued for it. The upstream provider's access token is used
+only to look up the identity and is not stored in the grant.
+
+### Redirect URIs
+
+Anyone can register an OAuth client with the server, so an authorization code is only ever
+sent to a redirect URI on `VAULT_ALLOWED_REDIRECT_URIS` (comma-separated, exact match). The
+default allows claude.ai only:
+
+```
+https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback
+```
+
+Other clients need their callback added. Claude Code uses a loopback callback
+(`http://localhost:<port>/callback`), so register it with a fixed port
+(`claude mcp add --callback-port <port> …`) and include that URI; for local testing with the
+MCP inspector, add the inspector's callback URL. Overriding the setting replaces the default,
+so keep the claude.ai entries in the list if you still use claude.ai.
 
 The `oidc` provider works with any OpenID Connect IdP — Microsoft Entra ID, Okta, Auth0,
 Keycloak, Slack, … — and resolves its endpoints from
@@ -78,11 +101,24 @@ either per deploy with a secret of the same name (`wrangler secret put`):
 - `VAULT_ALLOWED_PREFIXES` — if non-empty, only paths under these prefixes are exposed (default: empty = whole repo).
 - `VAULT_DENIED_PREFIXES` — always hidden (default: `.git/,.obsidian/,.claude/`).
 
-`read_note`, `write_note`, and `delete_note` all reject absolute paths and `..` traversal, and
-`write_note`/`delete_note` only accept markdown paths — the deny/allow policy applies equally to
-reads, writes, and deletes, so a mutation can never escape into `.git/`, `.obsidian/`, or agent
-dirs. To hide (and block writes/deletes to) additional folders, override `VAULT_DENIED_PREFIXES`
-with your extra prefixes.
+Prefixes match case-insensitively, so `.Claude/x.md` is hidden just like `.claude/x.md` (the
+vault is often checked out on a case-insensitive filesystem, where both are the same folder).
+
+`read_note`, `write_note`, and `delete_note` all reject absolute paths, `..` traversal, empty
+or `.` segments (`./.claude/x.md`, `a//b.md`), and control, zero-width, or bidi characters, and
+all three only accept markdown paths (`.md` / `.markdown`) — the deny/allow policy applies
+equally to reads, writes, and deletes, so a mutation can never escape into `.git/`,
+`.obsidian/`, or agent dirs. To hide (and block writes/deletes to) additional folders, override
+`VAULT_DENIED_PREFIXES` with your extra prefixes.
+
+On top of that, `write_note` and `delete_note` never touch:
+
+- any path with a segment starting with `.` (`.github/`, `.trash/`, …), even if it is readable;
+- agent instruction files — `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, in any
+  folder and any letter case — which an AI coding agent opened in the vault checkout would load
+  as instructions.
+
+These stay readable unless they are also denied.
 
 ## Quick start (C3)
 
@@ -118,6 +154,9 @@ with `wrangler secret put <NAME>`:
 
 - `VAULT_BRANCH` — branch of the vault repo to read (default `main`).
 - `VAULT_ALLOWED_PREFIXES` / `VAULT_DENIED_PREFIXES` — see [Access scope](#access-scope) above.
+- `VAULT_DISABLED_TOOLS` — tools left out (default `delete_note`); see [Tools](#tools) above.
+- `VAULT_ALLOWED_REDIRECT_URIS` — where authorization codes may be sent (default: the claude.ai
+  callbacks); see [Redirect URIs](#redirect-uris) above.
 
 ### 2. Create the KV namespace (stores OAuth grants)
 
@@ -170,7 +209,8 @@ Test with the MCP inspector:
 
 ```bash
 pnpm dlx @modelcontextprotocol/inspector@latest
-# connect to http://localhost:8788/mcp, complete the login
+# add the inspector's OAuth callback URL to VAULT_ALLOWED_REDIRECT_URIS in .dev.vars,
+# then connect to http://localhost:8788/mcp and complete the login
 ```
 
 ### 5b. Deploy to production
@@ -213,8 +253,10 @@ Endpoint: `https://vault-mcp.<subdomain>.workers.dev/mcp`
 
 - **claude.ai (Web):** Settings → Connectors → add custom connector with the `/mcp` URL.
   Registration is Web-only; it then syncs to Desktop and the iPhone app.
-- **Claude Code:** `claude mcp add --transport http vault https://vault-mcp.<subdomain>.workers.dev/mcp`
-  (completes the OAuth flow in the browser). Works even on a Mac that has not cloned the vault.
+- **Claude Code:** `claude mcp add --transport http --callback-port <port> vault https://vault-mcp.<subdomain>.workers.dev/mcp`
+  (completes the OAuth flow in the browser), after adding `http://localhost:<port>/callback` to
+  `VAULT_ALLOWED_REDIRECT_URIS` (see [Redirect URIs](#redirect-uris)). Works even on a Mac that
+  has not cloned the vault.
 
 ## Development
 

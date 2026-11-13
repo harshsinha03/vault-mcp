@@ -55,7 +55,8 @@
 	],
 	/**
    * No `vars` here. Optional overrides (VAULT_BRANCH, VAULT_ALLOWED_PREFIXES,
-   * VAULT_DENIED_PREFIXES) default in code (see src/config.ts) so this file stays
+   * VAULT_DENIED_PREFIXES, VAULT_DISABLED_TOOLS,
+   * VAULT_ALLOWED_REDIRECT_URIS) default in code (see src/config.ts) so this file stays
    * generic; set any of them as a secret above to override per deploy.
    */
 	"observability": {
