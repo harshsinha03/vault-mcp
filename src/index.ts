@@ -17,7 +17,7 @@ import {
 	searchNotesHandler,
 	writeNoteHandler,
 } from "./tools";
-import { vaultClientFromEnv } from "./vault";
+import { parseList, vaultClientFromEnv } from "./vault";
 import { version } from "../package.json";
 
 export class VaultMCP extends McpAgent<Env, Record<string, never>, Props> {
@@ -28,6 +28,7 @@ export class VaultMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 	async init() {
 		const client = vaultClientFromEnv(this.env);
+		const disabled = new Set(parseList(this.env.VAULT_DISABLED_TOOLS ?? "delete_note"));
 
 		this.server.tool(
 			"list_notes",
@@ -43,14 +44,14 @@ export class VaultMCP extends McpAgent<Env, Record<string, never>, Props> {
 			({ path }) => readNoteHandler(client, path),
 		);
 
-		this.server.tool(
+		if (!disabled.has("write_note")) this.server.tool(
 			"write_note",
 			"Create a new note or overwrite an existing one at a repo-relative path. Markdown files only.",
 			writeNoteInput.shape,
 			({ path, content }) => writeNoteHandler(client, path, content),
 		);
 
-		this.server.tool(
+		if (!disabled.has("delete_note")) this.server.tool(
 			"delete_note",
 			"Delete an existing note by its vault-relative path. Markdown files only; never touches non-note files.",
 			deleteNoteInput.shape,

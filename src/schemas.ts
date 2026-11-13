@@ -8,6 +8,8 @@ import { z } from "zod";
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 30;
+// One note never needs more; caps repo bloat from a runaway or injected write.
+const MAX_NOTE_CHARS = 512 * 1024;
 
 export const listNotesInput = z.object({
 	dir: z
@@ -24,6 +26,7 @@ export const writeNoteInput = z.object({
 	path: z.string().describe("Repo-relative path to the note, e.g. 'user_profile/identity.md'."),
 	content: z
 		.string()
+		.max(MAX_NOTE_CHARS)
 		.describe("Full markdown content to write. Overwrites the note if it already exists."),
 });
 

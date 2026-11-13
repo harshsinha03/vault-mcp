@@ -42,6 +42,11 @@ export const commonEnvSchema = z.object({
 	VAULT_BRANCH: z.string().min(1).default("main"),
 	VAULT_ALLOWED_PREFIXES: z.string().default(""),
 	VAULT_DENIED_PREFIXES: z.string().default(DEFAULT_DENIED_PREFIXES),
+	// Comma-separated tool names never registered, e.g. "delete_note" or
+	// "write_note,delete_note" for a read-only deploy. Defaults to no delete.
+	VAULT_DISABLED_TOOLS: z.string().default("delete_note"),
+	// Exact redirect URIs an authorization code may go to (see auth/handler.ts).
+	VAULT_ALLOWED_REDIRECT_URIS: z.string().optional(),
 });
 
 // Each login provider brings its own OAuth app credentials and its own

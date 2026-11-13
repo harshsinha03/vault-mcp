@@ -43,9 +43,9 @@ type ToolCallback = (args: Record<string, unknown>) => Promise<unknown>;
 const env = { VAULT_OWNER: "o" } as unknown as Env;
 const ctx = {} as unknown as ExecutionContext;
 
-const registeredTools = async () => {
+const registeredTools = async (agentEnv: Env = env) => {
 	const tool = vi.spyOn(McpServer.prototype, "tool");
-	const agent = new VaultMCP(ctx as never, env);
+	const agent = new VaultMCP(ctx as never, agentEnv);
 	await agent.init();
 	const entries = tool.mock.calls.map((call) => [call[0], call.at(-1) as ToolCallback] as const);
 	tool.mockRestore();
@@ -60,10 +60,15 @@ beforeEach(() => {
 });
 
 describe("VaultMCP", () => {
-	it("builds the vault client from the DO env and registers the five note tools", async () => {
+	it("builds the vault client from the DO env and registers every tool but delete_note by default", async () => {
 		const { agent, tools } = await registeredTools();
 		expect(vaultClientFromEnv).toHaveBeenCalledWith(env);
 		expect(agent.server).toBeInstanceOf(McpServer);
+		expect([...tools.keys()]).toEqual(["list_notes", "read_note", "write_note", "search_notes"]);
+	});
+
+	it("registers delete_note when VAULT_DISABLED_TOOLS is empty", async () => {
+		const { tools } = await registeredTools({ ...env, VAULT_DISABLED_TOOLS: "" } as Env);
 		expect([...tools.keys()]).toEqual([
 			"list_notes",
 			"read_note",
@@ -73,8 +78,16 @@ describe("VaultMCP", () => {
 		]);
 	});
 
+	it("leaves out every tool named in VAULT_DISABLED_TOOLS", async () => {
+		const { tools } = await registeredTools({
+			...env,
+			VAULT_DISABLED_TOOLS: "write_note, delete_note",
+		} as Env);
+		expect([...tools.keys()]).toEqual(["list_notes", "read_note", "search_notes"]);
+	});
+
 	it("routes each tool call to the vault client with its arguments", async () => {
-		const { tools } = await registeredTools();
+		const { tools } = await registeredTools({ ...env, VAULT_DISABLED_TOOLS: "" } as Env);
 
 		await tools.get("list_notes")?.({ dir: "sub" });
 		expect(vaultClient.listNotes).toHaveBeenCalledWith("sub");
