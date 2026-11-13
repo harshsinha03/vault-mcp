@@ -109,7 +109,12 @@ export class GitHubStorage implements VaultStorage {
 			mediaType: { format: "text-match" },
 		});
 
-		return res.data.items.map((item) => ({
+		// The query is model-supplied and may carry its own `repo:`/`org:` qualifiers,
+		// which GitHub ORs with ours; keep only hits from the vault repo itself.
+		const fullName = `${this.config.owner}/${this.config.repo}`.toLowerCase();
+		return res.data.items
+			.filter((item) => item.repository?.full_name?.toLowerCase() === fullName)
+			.map((item) => ({
 			path: item.path,
 			fragments: (item.text_matches ?? [])
 				.map((m) => m.fragment)

@@ -235,6 +235,7 @@ describe("searchNotes", () => {
 				items: [
 					{
 						path: "notes/found.md",
+						repository: { full_name: "o/r" },
 						text_matches: [{ fragment: "hello" }, { fragment: undefined }],
 					},
 				],
@@ -252,6 +253,21 @@ describe("searchNotes", () => {
 		expect(paths).toEqual(["notes/found.md", "notes/query-name.md"]);
 		const found = hits.find((h) => h.path === "notes/found.md");
 		expect(found?.fragments).toEqual(["hello"]);
+	});
+
+	it("drops content hits from repos other than the vault", async () => {
+		gh.code.mockResolvedValue({
+			data: {
+				items: [
+					{ path: "notes/mine.md", repository: { full_name: "O/R" }, text_matches: [] },
+					{ path: "secret.md", repository: { full_name: "o/other-private" }, text_matches: [] },
+					{ path: "orphan.md", text_matches: [] },
+				],
+			},
+		});
+		gh.getTree.mockResolvedValue(treeResult([]));
+		const hits = await client.searchNotes("x repo:o/other-private", 10);
+		expect(hits.map((h) => h.path)).toEqual(["notes/mine.md"]);
 	});
 
 	it("falls back to filename search when content search fails", async () => {
