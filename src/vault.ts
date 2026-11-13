@@ -31,6 +31,16 @@ export type SearchHit = ContentMatch;
 
 const NOTE_EXTENSIONS = [".md", ".markdown"];
 
+// Files an AI coding agent loads as instructions when it is opened in the vault
+// checkout. A write here turns one prompt-injected tool call into standing
+// instructions for that agent, so mutations never reach them.
+const AGENT_INSTRUCTION_FILES = ["claude.md", "claude.local.md", "agents.md", "gemini.md"];
+
+// C0/C1 controls plus zero-width, bidi and BOM characters: none belong in a note
+// path, and each can make two paths look equal to a human but not to a prefix check.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const UNSAFE_PATH_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
+
 /** Validate the Worker env (fail fast on misconfig) and wire the configured backend. */
 export function vaultClientFromEnv(env: Env): VaultClient {
 	const config = parseEnv(env);
@@ -68,18 +78,22 @@ export function isPathVisible(path: string, config: VaultConfig): boolean {
  * like traversal or an absolute path — those must never reach a backend.
  */
 export function normalizePath(path: string): string | null {
-	const trimmed = path.trim().replace(/^\/+/, "");
+	const trimmed = path.normalize("NFC").trim().replace(/^\/+/, "").replace(/\/+$/, "");
 	if (trimmed.length === 0) return null;
 	if (trimmed.includes("\\")) return null;
-	if (trimmed.includes("\0")) return null;
-	// Reject any `..` segment (traversal) — check segment-wise, not substring.
-	if (trimmed.split("/").some((seg) => seg === "..")) return null;
+	if (UNSAFE_PATH_CHARS.test(trimmed)) return null;
+	// Reject empty, `.` and `..` segments so `./.claude/x` or `a//b` can never
+	// slip past a prefix check that compares the literal string.
+	if (trimmed.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) return null;
 	return trimmed;
 }
 
+// Case-insensitive: the vault is checked out on case-insensitive filesystems
+// (macOS, Windows), where `.Claude/x.md` lands inside `.claude/`.
 function matchesPrefix(path: string, prefix: string): boolean {
-	const clean = prefix.replace(/\/+$/, "");
-	return path === clean || path.startsWith(`${clean}/`);
+	const clean = prefix.replace(/\/+$/, "").toLowerCase();
+	const p = path.toLowerCase();
+	return p === clean || p.startsWith(`${clean}/`);
 }
 
 function isNote(path: string): boolean {
@@ -112,6 +126,9 @@ export class VaultClient {
 
 	async readNote(path: string): Promise<{ path: string; content: string }> {
 		const normalized = this.guardReadable(path);
+		if (!isNote(normalized)) {
+			throw new VaultError(`Not a note (.md/.markdown): ${normalized}`);
+		}
 		const content = await this.storage.readFile(normalized);
 		return { path: normalized, content };
 	}
@@ -194,6 +211,13 @@ export class VaultClient {
 		const normalized = this.guardReadable(path);
 		if (!isNote(normalized)) {
 			throw new VaultError(`Not a note (.md/.markdown): ${normalized}`);
+		}
+		const segments = normalized.toLowerCase().split("/");
+		if (segments.some((seg) => seg.startsWith("."))) {
+			throw new VaultError(`Hidden paths are read-only: ${normalized}`);
+		}
+		if (AGENT_INSTRUCTION_FILES.includes(segments[segments.length - 1])) {
+			throw new VaultError(`Agent instruction files are read-only: ${normalized}`);
 		}
 		return normalized;
 	}

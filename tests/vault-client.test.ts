@@ -129,12 +129,17 @@ describe("readNote", () => {
 
 	it("throws when the path resolves to a directory listing", async () => {
 		gh.getContent.mockResolvedValue({ data: [{ type: "file", name: "x" }] });
-		await expect(client.readNote("adir")).rejects.toThrow(/Not a file/);
+		await expect(client.readNote("adir.md")).rejects.toThrow(/Not a file/);
 	});
 
 	it("throws when the entry is not a file", async () => {
 		gh.getContent.mockResolvedValue({ data: { type: "submodule", sha: "s" } });
-		await expect(client.readNote("mod")).rejects.toThrow(/Not a file/);
+		await expect(client.readNote("mod.md")).rejects.toThrow(/Not a file/);
+	});
+
+	it("refuses a non-note file before hitting the API", async () => {
+		await expect(client.readNote(".github/workflows/deploy.yml")).rejects.toThrow(/Not a note/);
+		expect(gh.getContent).not.toHaveBeenCalled();
 	});
 });
 
